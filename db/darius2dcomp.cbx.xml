@@ -1,0 +1,7 @@
+<?xml version="1.0" ?>
+<LOG_ROOT>
+	<PROJECT NAME="darius2dcomp">
+		<CBX_INST_ENTRY INSTANCE_NAME="|darius2dcomp|linebuffer:buffer_a0|altshift_taps:line_buffer_rtl_0" CBX_FILE_NAME="shift_taps_5mm.tdf"/>
+		<CBX_INST_ENTRY INSTANCE_NAME="|darius2dcomp|linebuffer:buffer_a1|altshift_taps:line_buffer_rtl_0" CBX_FILE_NAME="shift_taps_5mm.tdf"/>
+	</PROJECT>
+</LOG_ROOT>
