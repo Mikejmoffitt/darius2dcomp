@@ -39,16 +39,19 @@ end entity;
 
 architecture behavioral of darius2dcomp is
 
-signal buffer_en_0: std_logic := '0';
-signal buffer_en_1: std_logic := '0';
+signal buffer_en_a0: std_logic := '0';
+signal buffer_en_a1: std_logic := '0';
+signal buffer_en_b0: std_logic := '0';
+signal buffer_en_b1: std_logic := '0';
 
 -- Input signals for monitors A and B
 signal buffer_in_a0: std_logic_vector(14 downto 0);
-signal buffer_in_b0: std_logic_vector(14 downto 0);
 signal buffer_in_a1: std_logic_vector(14 downto 0);
+signal buffer_in_b0: std_logic_vector(14 downto 0);
 signal buffer_in_b1: std_logic_vector(14 downto 0);
 
 signal buffer_sel: std_logic := '0';
+signal buffer_sel_prev: std_logic := '0';
 
 signal hbl: std_logic := '0';
 signal hbl_prev: std_logic := '0';
@@ -63,28 +66,47 @@ signal buffer_out_a1: std_logic_vector(14 downto 0);
 signal buffer_out_b0: std_logic_vector(14 downto 0);
 signal buffer_out_b1: std_logic_vector(14 downto 0);
 
+signal buffer_pretap_a0: std_logic_vector(14 downto 0);
+signal buffer_pretap_a1: std_logic_vector(14 downto 0);
+signal buffer_pretap_b0: std_logic_vector(14 downto 0);
+signal buffer_pretap_b1: std_logic_vector(14 downto 0);
+
 signal hcount: std_logic_vector(17 downto 0) := (others => '0');
 
 signal routed_output: std_logic_vector(14 downto 0);
 
 constant BACKPORCH: integer := 0;
 
-constant SAMPLE_START: integer := 200;
-constant SAMPLE_LEN: integer := 640;
-constant SAMPLE_END: integer := SAMPLE_LEN + SAMPLE_START;
+constant RASTER_W: integer := 322;
 
-constant SCANOUT_START: integer := 128;
-constant SCANOUT_LEN: integer := 640;
-constant SCANOUT_END: integer := SCANOUT_LEN + SCANOUT_START;
+constant HCOUNT_ADJ: integer := 206;
+
+constant HCOUNT_CAP_START: integer := HCOUNT_ADJ;
+constant HCOUNT_CAP_END: integer := HCOUNT_CAP_START + (2 * RASTER_W) + 2;
+
+constant HCOUNT_A_START: integer := HCOUNT_ADJ + 2;
+constant HCOUNT_A_END: integer := HCOUNT_A_START + RASTER_W;
+
+constant HCOUNT_B_START: integer := HCOUNT_ADJ + RASTER_W;
+constant HCOUNT_B_END: integer := HCOUNT_B_START + RASTER_W;
+
+signal capture_en: std_logic := '0';
+signal scanout_a_en: std_logic := '0';
+signal scanout_b_en: std_logic := '0';
+signal display_en: std_logic := '0';
+
+signal debug_a_color: std_logic_vector(14 downto 0) := "111100111001110";
+signal debug_b_color: std_logic_vector(14 downto 0) := "011100111011110";
+signal debug_blank_color: std_logic_vector(14 downto 0) := "000000000000000";
 
 begin
 
 -- Monitor A input buffers
-	buffer_a0: entity work.linebuffer(behavioral) port map (clk, buffer_en_0, buffer_in_a0, buffer_out_a0);
-	buffer_a1: entity work.linebuffer(behavioral) port map (clk, buffer_en_1, buffer_in_a1, buffer_out_a1);
--- Monitor B input buffers
-	buffer_b0: entity work.linebuffer(behavioral) port map (clk, buffer_en_0, buffer_in_b0, buffer_out_b0);
-	buffer_b1: entity work.linebuffer(behavioral) port map (clk, buffer_en_1, buffer_in_b1, buffer_out_b1);
+	buffer_a0: entity work.linebuffer(behavioral) generic map(RASTER_W) port map (clk, buffer_en_a0, buffer_in_a0, buffer_out_a0, buffer_pretap_a0);
+	buffer_a1: entity work.linebuffer(behavioral) generic map(RASTER_W) port map (clk, buffer_en_a1, buffer_in_a1, buffer_out_a1, buffer_pretap_a1);
+-- Monitor B input buffers                                                                              
+	buffer_b0: entity work.linebuffer(behavioral) generic map(RASTER_W) port map (clk, buffer_en_b0, buffer_in_b0, buffer_out_b0, buffer_pretap_b0);
+	buffer_b1: entity work.linebuffer(behavioral) generic map(RASTER_W) port map (clk, buffer_en_b1, buffer_in_b1, buffer_out_b1, buffer_pretap_b1);
 
 	raw_in_a <= a_in_r & a_in_g & a_in_b;
 	raw_in_b <= b_in_r & b_in_g & b_in_b;
@@ -102,7 +124,7 @@ begin
 	begin
 		if (rising_edge(clk)) then
 			-- Vblank resets.
-			if (hbl = '1' and hbl_prev = '0') then
+			if (hbl = '0' and hbl_prev = '1') then
 				hcount <= (others => '0');
 			-- Start of active raster.
 			else
@@ -111,30 +133,99 @@ begin
 		end if;
 	end process;
 	
-	line_buffer_select: process(buffer_out_a0, buffer_out_b0, buffer_out_a1, buffer_out_b1, raw_in_a, raw_in_b, buffer_sel, hbl_in_n, hbl_prev_2, lat_in_n)
+	buffer_signals: process(buffer_out_a0, buffer_out_b0, buffer_out_a1, buffer_out_b1,
+	                            raw_in_a, raw_in_b, buffer_sel, hbl_in_n, hbl_prev,
+										 hbl_prev_2, lat_in_n, sw_in, hcount,
+										 buffer_pretap_b0, buffer_pretap_b1)
+	begin
+	-- (not hbl_prev or hbl_in_n) or lat_in_n
+		if (hcount >= HCOUNT_CAP_START and hcount < HCOUNT_CAP_END) then
+			capture_en <= '0' or hcount(0);
+		else
+			capture_en <= '1';
+		end if;
+		
+		if (hcount >= HCOUNT_A_START and hcount < HCOUNT_A_END) then
+			scanout_a_en <= not (hbl_prev or hbl_in_n);
+		else
+			scanout_a_en <= '1';
+		end if;
+		
+		if (hcount >= HCOUNT_B_START and hcount < HCOUNT_B_END) then
+			scanout_b_en <= not (hbl_prev or hbl_in_n);
+		else
+			scanout_b_en <= '1';
+		end if;
+		
+		if (hcount >= HCOUNT_A_START and hcount <= HCOUNT_B_END) then
+			display_en <= '1';
+		else
+			display_en <= '0';
+		end if;
+	end process;
+	
+	line_buffer_select: process(buffer_out_a0, buffer_out_b0, buffer_out_a1, buffer_out_b1,
+	                            raw_in_a, raw_in_b, buffer_sel, hbl_in_n, hbl_prev,
+										 hbl_prev_2, lat_in_n, sw_in, hcount, capture_en,
+										 buffer_pretap_b0, buffer_pretap_b1,
+										 scanout_a_en, scanout_b_en)
 	begin
 		if (buffer_sel = '0') then
 			-- BUFFER 0 SCANOUT
-			routed_output <= buffer_out_a0;
-			buffer_in_a0 <= buffer_out_b0;
+			if (scanout_a_en = '0') then
+				routed_output <= buffer_out_a0;
+			elsif (scanout_b_en = '0') then
+				routed_output <= buffer_out_b0;  
+			else
+				routed_output <= debug_blank_color;
+			end if;
+			buffer_in_a0 <= (others => '0');
 			buffer_in_b0 <= (others => '0');
-			buffer_en_0 <= not hbl_prev_2;
+			buffer_en_a0 <= scanout_a_en;
+			buffer_en_b0 <= scanout_b_en;
 			
-			-- Buffer 1 should simply capture during this time.
-			buffer_in_a1 <= raw_in_a;
-			buffer_in_b1 <= raw_in_b;
-			buffer_en_1 <= (not hbl_prev_2) or lat_in_n;
+			-- Buffer 1 CAPTURE
+			if (sw_in(0) = '1') then
+				buffer_in_a1 <= debug_a_color;
+			else
+				buffer_in_a1 <= raw_in_a;
+			end if;
+			if (sw_in(1) = '1') then
+				buffer_in_b1 <= debug_b_color;
+			else
+				buffer_in_b1 <= raw_in_b;
+			end if;
+				
+			buffer_en_a1 <= capture_en;
+			buffer_en_b1 <= capture_en;
 		else
 			-- BUFFER 1 SCANOUT
-			routed_output <= buffer_out_a1;
-			buffer_in_a1 <= buffer_out_b1;
+			if (scanout_a_en = '0') then
+				routed_output <= buffer_out_a1;
+			elsif (scanout_b_en = '0') then
+				routed_output <= buffer_out_b1;  
+			else
+				routed_output <= debug_blank_color;
+			end if;
+			buffer_in_a1 <= (others => '0');
 			buffer_in_b1 <= (others => '0');
-			buffer_en_1 <= not hbl_prev_2;
+			buffer_en_a1 <= scanout_a_en;
+			buffer_en_b1 <= scanout_b_en;
 			
-			-- Buffer 0 should simply capture during this time.
-			buffer_in_a0 <= raw_in_a;
-			buffer_in_b0 <= raw_in_b;
-			buffer_en_0 <= (not hbl_prev_2) or lat_in_n;
+			-- Buffer 0 CAPTURE
+			if (sw_in(0) = '1') then
+				buffer_in_a0 <= debug_a_color;
+			else
+				buffer_in_a0 <= raw_in_a;
+			end if;
+			if (sw_in(1) = '1') then
+				buffer_in_b0 <= debug_b_color;
+			else
+				buffer_in_b0 <= raw_in_b;
+			end if;
+			
+			buffer_en_a0 <= capture_en;
+			buffer_en_b0 <= capture_en;
 		end if;
 	end process;
 	
@@ -142,9 +233,10 @@ begin
 	begin
 		if (rising_edge(clk)) then
 			-- End of line swaps buffers.
+			buffer_sel_prev <= buffer_sel;
 			if (vbl_in_n = '0') then
 				buffer_sel <= '0';
-			elsif (hbl = '1' and hbl_prev = '0') then
+			elsif (hcount = 0) then
 				buffer_sel <= not buffer_sel;
 			end if;
 		end if;
@@ -155,16 +247,35 @@ begin
 	vga_output_set: process(clk)
 	begin
 		if (rising_edge(clk)) then
-			vga_blank_out <= hbl_prev_2 and vbl_in_n;
-			vga_sog_out <= '0';
+			if (sw_in(7) = '1') then
+				vga_blank_out <= display_en;
+			elsif (sw_in(5) = '0') then
+				vga_blank_out <= hbl_in_n and vbl_in_n;
+			elsif (sw_in(6) = '0') then
+				vga_blank_out <= '0';
+			else
+				vga_blank_out <= '1';
+			end if;
+			if (sw_in(2) = '1') then
+				vga_sog_out <= csync_in_n;
+			else
+				vga_sog_out <= '0';
+			end if;
 			vga_hsync_out <= csync_in_n;
 			vga_vsync_out <= '1';
-			vga_red_out <= routed_output(14 downto 10) & routed_output(14 downto 10);
-			vga_green_out <= routed_output(9 downto 5) & routed_output(9 downto 5);
-			vga_blue_out <= routed_output(4 downto 0) & routed_output(4 downto 0);
-			--vga_red_out <= (others => '0');
-			--vga_green_out <= "0" & hbl_in_n & "00000000";
-			--vga_blue_out <= a_in_b & a_in_b;
+			if (sw_in(3) = '1') then
+				vga_red_out <= a_in_r & a_in_r;
+				vga_green_out <= a_in_g & a_in_g;
+				vga_blue_out <= a_in_b & a_in_b;
+			elsif (sw_in(4) = '1') then
+				vga_red_out <= b_in_r & b_in_r;
+				vga_green_out <= b_in_g & b_in_g;
+				vga_blue_out <= b_in_b & b_in_b;
+			else
+				vga_red_out <= routed_output(14 downto 10) & routed_output(14 downto 10);
+				vga_green_out <= routed_output(9 downto 5) & routed_output(9 downto 5);
+				vga_blue_out <= routed_output(4 downto 0) & routed_output(4 downto 0);
+			end if;
 		end if;
 	end process;
 	

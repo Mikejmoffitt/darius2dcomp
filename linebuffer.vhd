@@ -16,7 +16,8 @@ port (
 	clk: in std_logic; -- A 12MHz clock (use Neo-Geo CPU clock)
 	enable_n: in std_logic; -- set to allow shifting on each clock, clear to hold
 	buffer_in : in std_logic_vector(14 downto 0);
-	buffer_out: out std_logic_vector(14 downto 0)
+	buffer_out: out std_logic_vector(14 downto 0);
+	buffer_pretap: out std_logic_vector(14 downto 0)
 );
 end linebuffer;
 
@@ -39,6 +40,7 @@ begin
 			end if;
 			-- Better to set outputs on the clock
 			buffer_out <= line_buffer(line_len - 1);
+			buffer_pretap <= line_buffer(line_len - 2);
 		end if;
 	end process;
 end behavioral;
